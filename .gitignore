@@ -1,0 +1,31 @@
+
+ask-the-ai-interviewer/
+dist/
+build/
+
+# Terraform state and crash logs
+*.tfstate
+*.tfstate.*
+.terraform/
+crash.log
+.terraform.lock.hcl
+
+# Python cache
+__pycache__/
+*.pyc
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# AWS credentials
+*.pem
+*.key
+
+# VS Code settings
+.vscode/
+
+# Logs
+*.log
+
+# Env
