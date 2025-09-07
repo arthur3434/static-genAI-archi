@@ -29,3 +29,5 @@ Thumbs.db
 *.log
 
 # Env
+lambda_function.zip
+.env

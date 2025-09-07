@@ -1,11 +1,10 @@
 variable "project_name" {
-  description = "Name for tagging the S3 bucket."
+  description = "Name for tagging resources"
   type        = string
-  default     = "ask-the-ai-interviewer"
 }
 
 variable "aws_region" {
-  description = "AWS region for resources"
+  description = "AWS region"
   type        = string
   default     = "eu-west-3"
 }
@@ -15,4 +14,3 @@ variable "bedrock_model_id" {
   type        = string
   default     = "amazon.titan-text-express-v1"
 }
-

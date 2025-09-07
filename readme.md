@@ -13,18 +13,11 @@ This architecture is ideal for creating a variety of applications, such as a con
 
 - Amazon Bedrock: This managed service provides access to a variety of foundation models (FMs) from different providers. Your Lambda function communicates with Bedrock to get the AI-generated response. The chosen model then performs the requested task, such as generating text, answering a question, or providing a summary.
 
-## Architecture 
+##² Architecture 
 
 ```
 +--------------------+
 |   USER (Browser)   |
-+---------+----------+
-          |
-  (1) HTTPS Request
-          |
-+---------v----------+
-|  Amazon CloudFront |
-|        (CDN)       |
 +---------+----------+
           |
    (2) HTTPS Request
@@ -49,3 +42,6 @@ This architecture is ideal for creating a variety of applications, such as a con
 +-------------------+----------------------+
 ```
 
+## To do
+
+- CloudFront : accelerate the delivery of your static and dynamic web content (cache in edge locations)
