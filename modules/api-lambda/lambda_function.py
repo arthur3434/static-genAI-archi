@@ -1,284 +1,205 @@
 import json
 import boto3
 import os
-from typing import Dict, Any
 import re
+import logging
+from typing import Dict, Any
+
+# Configure logging
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 # Initialize Bedrock client
-bedrock = boto3.client('bedrock-runtime', region_name='${aws_region}')
+bedrock = boto3.client('bedrock-runtime', region_name=os.environ.get('AWS_REGION', 'eu-west-3'))
+
+# Security constants
+MAX_INPUT_LENGTH = 10000
+MIN_INPUT_LENGTH = 10
+DANGEROUS_PATTERNS = ['<script', 'javascript:', 'data:', 'vbscript:', 'onload=', 'onerror=']
+
+def validate_input(role_description: str) -> tuple[bool, str]:
+    """Validate input for security and content requirements."""
+    if not role_description or len(role_description.strip()) == 0:
+        return False, "Role description cannot be empty"
+    if len(role_description) < MIN_INPUT_LENGTH:
+        return False, f"Role description must be at least {MIN_INPUT_LENGTH} characters"
+    if len(role_description) > MAX_INPUT_LENGTH:
+        return False, f"Role description must be less than {MAX_INPUT_LENGTH} characters"
+    
+    role_lower = role_description.lower()
+    for pattern in DANGEROUS_PATTERNS:
+        if pattern in role_lower:
+            return False, "Invalid characters detected in role description"
+    
+    return True, "Valid input"
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """
-    Lambda function to process interview role descriptions and generate prompts using Amazon Bedrock.
-    """
+    """Lambda function to process interview role descriptions and generate prompts using Amazon Bedrock."""
+    request_id = context.aws_request_id if context else "unknown"
+    logger.info(f"Processing request {request_id}")
+    
     try:
-        # Parse the request body
+        # Parse request body
         if isinstance(event.get('body'), str):
             body = json.loads(event['body'])
         else:
             body = event.get('body', {})
         
-        # Extract role description from the request
         role_description = body.get('role_description', '')
-        
-        if not role_description:
+        is_valid, error_message = validate_input(role_description)
+        if not is_valid:
+            logger.warning(f"Invalid input in request {request_id}: {error_message}")
             return {
                 'statusCode': 400,
                 'headers': {
                     'Content-Type': 'application/json',
                     'Access-Control-Allow-Origin': '*',
-                    'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-                    'Access-Control-Allow-Methods': 'GET,OPTIONS,POST'
+                    'Access-Control-Allow-Headers': 'Content-Type,x-api-key',
+                    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                    'Access-Control-Max-Age': '3600'
                 },
-                'body': json.dumps({
-                    'error': 'role_description is required'
-                })
+                'body': json.dumps({'error': error_message})
             }
         
-        # Create the prompt for the interview
         prompt = create_interview_prompt(role_description)
-        
-        # Call Bedrock to generate interview questions for the interviewer
         interview_preparation = generate_interview_questions(prompt)
+
+        # Log what is received from Bedrock
+        logger.info(f"Bedrock output: {json.dumps(interview_preparation)}")
         
-        # Transform the response to match frontend expected format
-        frontend_response = {
-            'questions': []
-        }
+        frontend_response = {'questions': []}
+        rows = interview_preparation.get('questions') or interview_preparation.get('rows') or []
+
+        for q in rows:
+            suggested_answer_parts = []
+            if q.get('good_answer_indicators'):
+                suggested_answer_parts.append("What to look for:")
+                for indicator in q['good_answer_indicators']:
+                    suggested_answer_parts.append(f"• {indicator}")
+            if q.get('red_flags'):
+                suggested_answer_parts.append("\nRed flags to watch for:")
+                for flag in q['red_flags']:
+                    suggested_answer_parts.append(f"• {flag}")
+            if q.get('evaluation_tips'):
+                suggested_answer_parts.append(f"\nEvaluation tip: {q['evaluation_tips']}")
+            suggested_answer = "\n".join(suggested_answer_parts) if suggested_answer_parts else "Look for specific examples and detailed explanations."
+
+            frontend_response['questions'].append({
+                'question': q.get('question', ''),
+                'suggestedAnswer': suggested_answer,
+                'category': q.get('category', 'General')
+            })
         
-        if 'questions' in interview_preparation:
-            for q in interview_preparation['questions']:
-                # Combine good answer indicators and evaluation tips into suggested answer
-                suggested_answer_parts = []
-                
-                if q.get('good_answer_indicators'):
-                    suggested_answer_parts.append("What to look for:")
-                    for indicator in q['good_answer_indicators']:
-                        suggested_answer_parts.append(f"• {indicator}")
-                
-                if q.get('red_flags'):
-                    suggested_answer_parts.append("\nRed flags to watch for:")
-                    for flag in q['red_flags']:
-                        suggested_answer_parts.append(f"• {flag}")
-                
-                if q.get('evaluation_tips'):
-                    suggested_answer_parts.append(f"\nEvaluation tip: {q['evaluation_tips']}")
-                
-                suggested_answer = "\n".join(suggested_answer_parts) if suggested_answer_parts else "Look for specific examples and detailed explanations."
-                
-                frontend_response['questions'].append({
-                    'question': q.get('question', ''),
-                    'suggestedAnswer': suggested_answer,
-                    'category': q.get('category', 'General')
-                })
-        
+        logger.info(f"Successfully generated questions for request {request_id}")
         return {
             'statusCode': 200,
             'headers': {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-                'Access-Control-Allow-Methods': 'GET,OPTIONS,POST'
+                'Access-Control-Allow-Headers': 'Content-Type,x-api-key',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Max-Age': '3600'
             },
             'body': json.dumps(frontend_response)
         }
         
     except Exception as e:
-        print(f"Error processing request: {str(e)}")
+        logger.error(f"Error processing request {request_id}: {str(e)}", exc_info=True)
         return {
             'statusCode': 500,
             'headers': {
                 'Content-Type': 'application/json',
                 'Access-Control-Allow-Origin': '*',
-                'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-                'Access-Control-Allow-Methods': 'GET,OPTIONS,POST'
+                'Access-Control-Allow-Headers': 'Content-Type,x-api-key',
+                'Access-Control-Allow-Methods': 'POST, OPTIONS',
+                'Access-Control-Max-Age': '3600'
             },
-            'body': json.dumps({
-                'error': f'Internal server error: {str(e)}'
-            })
+            'body': json.dumps({'error': 'Internal server error. Please try again later.'})
         }
 
 def create_interview_prompt(role_description: str) -> str:
-    """
-    Create a structured prompt for generating interview questions for interviewers preparing to conduct interviews.
-    """
+    """Create structured prompt for generating interview questions for interviewers."""
     prompt = f"""
-You are an expert interview coach helping interviewers prepare for conducting interviews. Based on the following job description, create a comprehensive set of interview questions that an interviewer can use to assess candidates for this position.
+You are an expert interview coach helping interviewers prepare for conducting interviews. Based on the following job description, create a comprehensive set of interview questions that an interviewer can use to assess candidates.
 
 Job Description:
 {role_description}
 
 Please generate 8-12 interview questions that cover:
-1. Technical skills and knowledge relevant to the role
+1. Technical skills and knowledge
 2. Problem-solving and analytical thinking
-3. Experience with relevant tools and technologies
+3. Experience with relevant tools
 4. Behavioral and situational questions
 5. Role-specific scenarios
 6. Leadership and teamwork (if applicable)
 7. Cultural fit and motivation
 
 For each question, provide:
-- The main question to ask
-- A follow-up question to dig deeper
+- The main question
+- A follow-up question
 - What a good answer should include
 - Red flags to watch out for
 - How to evaluate the response
 
-Format your response as a JSON object with the following structure:
+Format your response as a JSON object with the structure:
 {{
     "questions": [
         {{
             "category": "Technical Skills",
             "question": "What is your experience with [specific technology]?",
-            "follow_up": "Can you walk me through a specific project where you used this technology?",
-            "good_answer_indicators": [
-                "Specific examples with details",
-                "Understanding of best practices",
-                "Mention of challenges faced and how they were solved"
-            ],
-            "red_flags": [
-                "Vague or generic responses",
-                "Inability to provide specific examples",
-                "Lack of understanding of basic concepts"
-            ],
-            "evaluation_tips": "Look for depth of knowledge and practical experience"
-        }},
-        {{
-            "category": "Problem Solving",
-            "question": "How would you approach [specific scenario]?",
-            "follow_up": "What would you do if [complication] occurred?",
-            "good_answer_indicators": [
-                "Structured approach to problem-solving",
-                "Asks clarifying questions",
-                "Considers multiple solutions"
-            ],
-            "red_flags": [
-                "Jumping to conclusions without analysis",
-                "Unable to think through the problem step by step",
-                "Giving up easily when faced with obstacles"
-            ],
-            "evaluation_tips": "Assess their logical thinking process and persistence"
-        }},
-        {{
-            "category": "Behavioral",
-            "question": "Tell me about a time when you had to work with a difficult team member.",
-            "follow_up": "How did you resolve the conflict and what was the outcome?",
-            "good_answer_indicators": [
-                "Shows emotional intelligence and conflict resolution skills",
-                "Focuses on solutions rather than blame",
-                "Demonstrates learning from the experience"
-            ],
-            "red_flags": [
-                "Blames others entirely",
-                "Shows inability to work with different personalities",
-                "No clear resolution or learning"
-            ],
-            "evaluation_tips": "Look for maturity, empathy, and problem-solving approach"
-        }},
-        {{
-            "category": "Motivation",
-            "question": "Why are you interested in this role and our company?",
-            "follow_up": "What do you know about our recent projects or company culture?",
-            "good_answer_indicators": [
-                "Specific knowledge about the company",
-                "Clear connection between their goals and the role",
-                "Genuine enthusiasm and research"
-            ],
-            "red_flags": [
-                "Generic answers that could apply to any company",
-                "No research about the company",
-                "Focus only on salary or benefits"
-            ],
-            "evaluation_tips": "Assess their preparation, motivation, and cultural fit"
+            "follow_up": "Can you walk me through a project using this technology?",
+            "good_answer_indicators": ["Specific examples", "Understanding of best practices"],
+            "red_flags": ["Vague responses", "No specific examples"],
+            "evaluation_tips": "Assess practical experience"
         }}
     ]
 }}
-
-Make sure the questions are specific to the role and industry mentioned in the description. Focus on helping the interviewer conduct an effective interview.
+Make sure questions are specific to the role and industry. Focus on helping the interviewer conduct an effective interview.
 """
     return prompt
 
 def generate_interview_questions(prompt: str) -> Dict[str, Any]:
-    """
-    Call Amazon Bedrock to generate interview questions.
-    """
+    """Call Amazon Bedrock to generate interview questions."""
     try:
         model_id = os.environ.get('BEDROCK_MODEL_ID', 'amazon.titan-text-lite-v1')
-
-        if 'titan' in model_id.lower():
-            # Add a clear instruction to the prompt for better JSON output
-            enhanced_prompt = f"{prompt}\n\nPlease respond with only the JSON object."
-            body = {
-                "inputText": enhanced_prompt,
-                "textGenerationConfig": {
-                    "maxTokenCount": 2000,
-                    "temperature": 0.7,
-                    "topP": 0.9
-                }
-            }
-            
-            response = bedrock.invoke_model(
-                modelId=model_id,
-                body=json.dumps(body),
-                contentType='application/json'
-            )
-            
-            response_body = json.loads(response['body'].read())
-            generated_text = response_body.get('results', [{}])[0].get('outputText', '')
-            
-        else: # For other models like Claude
-            enhanced_prompt = f"\n\nHuman: {prompt}\n\nAssistant: Please provide your response as a single JSON object. Do not include any other text."
-            body = {
-                "prompt": enhanced_prompt,
-                "max_tokens_to_sample": 2000,
+        enhanced_prompt = f"{prompt}\n\nPlease respond with only the JSON object."
+        body = {
+            "inputText": enhanced_prompt,
+            "textGenerationConfig": {
+                "maxTokenCount": 2000,
                 "temperature": 0.7,
-                "top_p": 0.9
+                "topP": 0.9
             }
-            
-            response = bedrock.invoke_model(
-                modelId=model_id,
-                body=json.dumps(body),
-                contentType='application/json'
-            )
-            
-            response_body = json.loads(response['body'].read())
-            generated_text = response_body.get('completion', '')
+        }
+        response = bedrock.invoke_model(
+            modelId=model_id,
+            body=json.dumps(body),
+            contentType='application/json'
+        )
+        response_body = json.loads(response['body'].read())
+        generated_text = response_body.get('results', [{}])[0].get('outputText', '')
         
-        # Use regex to find and extract the JSON object
+        # Log raw model output
+        logger.info(f"Raw model output: {generated_text}")
+        
+        # Extract JSON
         json_match = re.search(r'\{.*\}', generated_text, re.DOTALL)
         if json_match:
             try:
-                json_string = json_match.group(0)
-                return json.loads(json_string)
+                data = json.loads(json_match.group(0))
+                if "questions" not in data:
+                    data["questions"] = []
+                return data
             except json.JSONDecodeError as e:
-                print(f"Failed to parse JSON from model output: {e}")
-                print(f"Raw model output: {generated_text}")
-                # Fallback to the same error structure as the main handler
-                return {
-                    "questions": [{
-                        "category": "Error",
-                        "question": "Failed to parse model response. Please try again.",
-                        "suggestedAnswer": f"Error: {str(e)}"
-                    }]
-                }
+                logger.error(f"Failed to parse JSON from model output: {e}")
+                return {"questions": []}
         else:
-            # Fallback if no JSON object is found in the response
-            print(f"No JSON object found in model output: {generated_text}")
-            return {
-                "questions": [{
-                    "category": "Error",
-                    "question": "Model did not return a valid JSON response. Please check your prompt.",
-                    "suggestedAnswer": ""
-                }]
-            }
-    
+            logger.warning("No JSON object found in model output.")
+            return {"questions": []}
     except Exception as e:
-        print(f"Error calling Bedrock: {str(e)}")
-        # Return the fallback response as you already have it
-        return {
-            "questions": [{
-                "category": "Error",
-                "question": "Unable to generate questions at this time. Please try again.",
-                "suggestedAnswer": f"Error: {str(e)}"
-            }]
-        }
+        logger.error(f"Error calling Bedrock: {str(e)}", exc_info=True)
+        return {"questions": [{
+            "category": "Error",
+            "question": "Unable to generate questions at this time.",
+            "suggestedAnswer": "Please try again later."
+        }]}

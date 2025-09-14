@@ -118,6 +118,7 @@ resource "aws_api_gateway_method" "interview_method" {
   resource_id   = aws_api_gateway_resource.interview_resource.id
   http_method   = "POST"
   authorization = "NONE"
+  api_key_required = true
 }
 
 # API Gateway integration
@@ -137,7 +138,48 @@ resource "aws_lambda_permission" "api_gateway_lambda" {
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.interview_processor.arn
   principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_api_gateway_rest_api.interview_api.execution_arn}/*/*"
+  source_arn    = "${aws_api_gateway_rest_api.interview_api.execution_arn}/*/POST/interview"
+}
+
+# API Gateway Usage Plan for rate limiting
+resource "aws_api_gateway_usage_plan" "api_usage_plan" {
+  name = "${var.project_name}-usage-plan"
+  
+  api_stages {
+    api_id = aws_api_gateway_rest_api.interview_api.id
+    stage  = aws_api_gateway_stage.interview_stage.stage_name
+  }
+  
+  quota_settings {
+    limit  = 1000
+    period = "DAY"
+  }
+  
+  throttle_settings {
+    burst_limit = 100
+    rate_limit  = 50
+  }
+  
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# API Gateway API Key
+resource "aws_api_gateway_api_key" "api_key" {
+  name = "${var.project_name}-api-key"
+  description = "API Key for interview preparation service"
+  
+  tags = {
+    Project = var.project_name
+  }
+}
+
+# Link API Key to Usage Plan
+resource "aws_api_gateway_usage_plan_key" "main" {
+  key_id        = aws_api_gateway_api_key.api_key.id
+  key_type      = "API_KEY"
+  usage_plan_id = aws_api_gateway_usage_plan.api_usage_plan.id
 }
 
 # CORS configuration
@@ -162,7 +204,7 @@ resource "aws_api_gateway_integration" "interview_options_integration" {
 resource "aws_api_gateway_stage" "interview_stage" {
   rest_api_id = aws_api_gateway_rest_api.interview_api.id
   deployment_id = aws_api_gateway_deployment.interview_deployment.id
-  stage_name = "prod"
+  stage_name  = "prod"
 }
 
 resource "aws_api_gateway_method_response" "interview_options_response" {
@@ -185,7 +227,7 @@ resource "aws_api_gateway_integration_response" "interview_options_integration_r
   status_code = aws_api_gateway_method_response.interview_options_response.status_code
 
   response_parameters = {
-    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+    "method.response.header.Access-Control-Allow-Headers" = "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token,x-api-key'"
     "method.response.header.Access-Control-Allow-Methods" = "'GET,OPTIONS,POST'"
     "method.response.header.Access-Control-Allow-Origin"  = "'*'"
   }

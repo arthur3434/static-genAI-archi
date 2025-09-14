@@ -16,3 +16,9 @@ variable "error_document" {
 }
 
 variable "project_name" {}
+
+variable "cloudfront_distribution_arn" {
+  description = "ARN of the CloudFront distribution"
+  type        = string
+  default     = ""
+}

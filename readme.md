@@ -1,17 +1,47 @@
-# Architecture Overview – Ask the AI Interviewer
+# Architecture Overview  Ask the AI
 
 The project provides a generic serverless architecture to deploy a static website that interacts with a large language model (LLM) using Amazon Bedrock.
 
 This architecture is ideal for creating a variety of applications, such as a content generator, a chatbot, or a question-and-answer tool. It's designed to be easily replicated and adapted for different business needs.
 
 ## Key Components of the Architecture
-- Frontend: The static website, built with HTML, CSS, and JavaScript, is hosted on Amazon S3. This ensures the site is highly available and cost-effective.
 
-- API Gateway: This service acts as the single entry point for all requests from the frontend to the backend. It exposes a secure REST API that triggers the serverless code.
+### **Frontend (S3 + CloudFront)**
+- **Technology**: React/TypeScript with Tailwind CSS
+- **Hosting**: Amazon S3 static website hosting
+- **CDN**: CloudFront distribution with 15+ edge locations
+- **Security**: OAC authentication
+- **Performance**: Browser caching & compression out of the box
+- **Cost**: Pay-per-request, no server maintenance
 
-- Lambda: This is the core of the application's logic. A Lambda function, written in a language like Python, takes the user's input from the API Gateway. It's responsible for making the call to the Bedrock API.
+### **API Gateway**
+- **Type**: REST API with HTTPS endpoints
+- **Authentication**: API Key required (`x-api-key` header)
+- **Rate Limiting**: 1000 requests/day per API key
+- **Throttling**: 50 requests/second, 100 burst limit
+- **CORS**: Restricted to CloudFront domain only
+- **Monitoring**: CloudWatch integration, request/response logging
 
-- Amazon Bedrock: This managed service provides access to a variety of foundation models (FMs) from different providers. Your Lambda function communicates with Bedrock to get the AI-generated response. The chosen model then performs the requested task, such as generating text, answering a question, or providing a summary.
+### **Lambda Function**
+- **Runtime**: Python 3.11
+- **Memory**: 128 MB (configurable)
+- **Timeout**: 15 seconds (security optimized)
+- **Input Validation**: Length (10-10000 chars), pattern filtering
+- **Error Handling**: Generic error messages, structured logging
+- **IAM Role**: Bedrock access with least privilege principle
+
+### **Amazon Bedrock**
+- **Model**: `amazon.titan-text-express-v1` (default)
+- **Context**: 8K tokens maximum
+- **Cost**: $0.0008 per 1K input tokens, $0.0016 per 1K output tokens
+- **Region**: eu-west-3 (Paris)
+- **Access**: IAM-based authentication
+- **Fallback**: `amazon.titan-text-lite-v1` for cost optimization
+
+### **Monitoring & Security**
+- **CloudWatch Dashboard**: Real-time metrics visualization
+- **SNS Alerts**: Email notifications for errors and anomalies
+- **Log Retention**: 14 days (configurable)
 
 ##² Architecture 
 
@@ -20,28 +50,54 @@ This architecture is ideal for creating a variety of applications, such as a con
 |   USER (Browser)   |
 +---------+----------+
           |
-   (2) HTTPS Request
+   (1) HTTPS Request
           |
 +---------v----------+
-| Amazon API Gateway |
-|   (Endpoint API)   |
+|   CloudFront CDN   |
+| +---------------+  |
+| |    AWS WAF    |  |
+| +---------------+  |
 +---------+----------+
-          |
-    (3) Lambda Trigger
-          |
-+---------v----------+
-|    AWS Lambda      |
-|  (Fonction Code)   |
-+---------+----------+
-   |             |
-   | (4) Log/Metrics |
-   |               |
-+--v----------------+--v------------------+
-| Amazon CloudWatch | Amazon Bedrock       |
-|    (Monitoring)   |   (AI Generation)    |
-+-------------------+----------------------+
+     |          |
+     |          +----------------------+
+     |                                 |
+     | (2a) Static Content             | (2b) API Requests
+     |                                 |
++----v----+                      +-----v------+
+|  Amazon |                      |   Amazon   |
+|   S3    |                      | API Gateway|
+| (Static |                      | (Endpoint) |
+| Website)|                      +-----+------+
++---------+                            |
+                                       |
+                                (3) Lambda Trigger
+                                       |
+                                 +-----v------+
+                                 |   AWS       |
+                                 |   Lambda    |
+                                 +-----+------+
+                                       |
+                          +------------+-------------+
+                          |                          |
+                    (4) Logs/Metrics           (5) AI Generation
+                          |                          |
+                   +------v------+          +--------v--------+
+                   | Amazon      |          |  Amazon Bedrock |
+                   | CloudWatch  |          |  (Generative AI)|
+                   +-------------+          +-----------------+
+
 ```
 
 ## To do
 
-- CloudFront : accelerate the delivery of your static and dynamic web content (cache in edge locations)
+- PROBLEM timeout -> SQS event
+
+- Configure WAF rules for CloudFront
+
+- Add VPC + Security Groups for network isolation
+
+- Set up SSL certificates for production
+
+- Encrypt and rotate keys with KMS
+
+- Fine-tune API security beyond simple key auth
